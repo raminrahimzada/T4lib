@@ -1,0 +1,362 @@
+// T4 script by R3
+<#@ output extension=".cs" #>
+<#@ assembly name="System.Data" #>
+<#@ assembly name="System.Core.dll" #>
+<#@ assembly name="System.Xml" #>
+<#@ assembly name="Microsoft.SqlServer.ConnectionInfo" #>
+<#@ assembly name="Microsoft.SqlServer.Smo" #>
+<#@ assembly name="System.Core" #>
+<#@ assembly name="Microsoft.SqlServer.Management.Sdk.Sfc" #>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text.RegularExpressions" #>
+<#@ import namespace="System.Data.SqlClient" #>
+<#@ import namespace="Microsoft.SqlServer.Management.Smo" #>
+<#@ import namespace="Microsoft.SqlServer.Management.Common" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ template debug="true" hostspecific="false" language="C#" #>
+using System;
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+using Microsoft.EntityFrameworkCore;
+<#
+const string contextName="BMS";
+static string ClassName(string s)
+{
+    s=PascalCase(s);
+    return s+"Dao";
+}
+static string ClassNameView(string s)
+{
+    s=PascalCase(s);
+	s=s.Replace("-","_");
+    return s+"ViewDao";
+}
+static string PropertyName(string s)
+{
+    s=PascalCase(s);
+    return s;
+}
+static string PropertyNamePluralize(string s)
+{
+    s=PascalCase(s);
+    if(!s.EndsWith("s")) s=s+"s";
+    return s;
+}
+static string PropertyNamePluralizeView(string s)
+{
+	s=PascalCase(s);
+    if(!s.EndsWith("s")) s=s+"s";
+    return "View"+s;
+}
+static string ClassNameProcedure(string s)
+{
+	return PascalCase(s);
+}
+#>
+<#
+//========================================================================================================
+int Indent = 0;
+void W(string line)
+{
+	for(var i=0;i<Indent;i++) this.Write("\t");
+	this.WriteLine(line);
+}
+void WW(string line)
+{
+	for(var i=0;i<Indent;i++) this.Write("\t");
+	this.Write(line);
+}
+static System.Type ToCSharpType(Microsoft.SqlServer.Management.Smo.SqlDataType ColType) 
+{
+	Type typ = typeof(string);
+
+	switch (ColType)
+	{
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.BigInt: 
+			typ = typeof(System.Int64);
+			break;
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Bit:
+			typ = typeof(System.Boolean);
+			break;
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Char:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.VarChar:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.VarCharMax:
+			typ = typeof(System.String);
+			break;
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.DateTime:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Time:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.DateTime2:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Date:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.SmallDateTime:
+			typ = typeof(System.DateTime) ;
+			break;	
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.DateTimeOffset:
+			typ = typeof(System.DateTimeOffset) ;
+			break;				
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Decimal:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Money:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.SmallMoney:
+			typ = typeof(System.Decimal);
+			break;
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Int:
+			typ = typeof(System.Int32);
+			break;
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.NChar:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.NText:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.NVarChar:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.NVarCharMax:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Text:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.SysName:
+			typ = typeof(System.String);  
+			break;
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Real:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Numeric:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Float:
+			
+			typ = typeof(System.Double);
+			break;
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Timestamp:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Binary:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.VarBinary:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.VarBinaryMax:
+			typ = typeof(System.Byte[]);
+			break;
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.TinyInt:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.SmallInt:
+			typ = typeof(System.Int16);
+			break;
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.UniqueIdentifier:
+			typ = typeof(System.Guid);
+			break;
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.UserDefinedDataType:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.UserDefinedTableType:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.UserDefinedType:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Variant:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Image:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Geography:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Geometry:
+		case Microsoft.SqlServer.Management.Smo.SqlDataType.Xml:
+			typ = typeof(Object);
+			break;
+		default: 
+			throw new System.Exception("Invalid Sql Type found: " + ColType);
+			break;
+	}
+
+	return typ;
+}
+static string ToPascalCase(string original)
+{
+    Regex invalidCharsRgx = new Regex("[^_a-zA-Z0-9]");
+    Regex whiteSpace = new Regex(@"(?<=\s)");
+    Regex startsWithLowerCaseChar = new Regex("^[a-z]");
+    Regex firstCharFollowedByUpperCasesOnly = new Regex("(?<=[A-Z])[A-Z0-9]+$");
+    Regex lowerCaseNextToNumber = new Regex("(?<=[0-9])[a-z]");
+    Regex upperCaseInside = new Regex("(?<=[A-Z])[A-Z]+?((?=[A-Z][a-z])|(?=[0-9]))");
+
+    // replace white spaces with undescore, then replace all invalid chars with empty string
+    var pascalCase = invalidCharsRgx.Replace(whiteSpace.Replace(original, "_"), string.Empty)
+        // split by underscores
+        .Split(new char[] { '_' }, StringSplitOptions.RemoveEmptyEntries)
+        // set first letter to uppercase
+        .Select(w => startsWithLowerCaseChar.Replace(w, m => m.Value.ToUpper()))
+        // replace second and all following upper case letters to lower if there is no next lower (ABC -> Abc)
+        .Select(w => firstCharFollowedByUpperCasesOnly.Replace(w, m => m.Value.ToLower()))
+        // set upper case the first lower case following a number (Ab9cd -> Ab9Cd)
+        .Select(w => lowerCaseNextToNumber.Replace(w, m => m.Value.ToUpper()))
+        // lower second and next upper case letters except the last if it follows by any lower (ABcDEf -> AbcDef)
+        .Select(w => upperCaseInside.Replace(w, m => m.Value.ToLower()));
+
+    return string.Concat(pascalCase);
+}
+static string CamelCase(string s)
+    {
+        var x = s.Replace("_", "");
+        if (x.Length == 0) return "null";
+        x = Regex.Replace(x, "([A-Z])([A-Z]+)($|[A-Z])",
+            m => m.Groups[1].Value + m.Groups[2].Value.ToLower() + m.Groups[3].Value);
+        return char.ToLower(x[0]) + x.Substring(1);
+    }
+    static string PascalCase(string s)
+    {
+		return ToPascalCase(s);
+        //var x = CamelCase(s);
+        //return char.ToUpper(x[0]) + x.Substring(1);
+    }
+#>
+<# 
+    //========================================================================================================
+    var server = new Server(".\\SERVER19");
+    var db = server.Databases["ERP"];
+#>
+<# 
+    //========================================================================================================
+    var tables=db.Tables;
+    var views=db.Views;
+	var nameSpaceName=System.Runtime.Remoting.Messaging.CallContext.LogicalGetData("NamespaceHint");
+
+	W($"namespace {nameSpaceName}");
+	W("{");
+	Indent++;
+	W("/// <summary>");
+	W("/// Main Database Context");
+	W("/// </summary>");
+	W($"public partial class {ClassName(contextName)}DbContext:DbContext");
+	W("{");
+	Indent++;
+	W("//Tables");
+    foreach (Microsoft.SqlServer.Management.Smo.Table table in tables)
+    {
+		W($"public DbSet<{ClassName(table.Name)}> {PropertyNamePluralize(table.Name)} {{ get; set; }}");
+    }
+	W("//Views");
+    foreach (Microsoft.SqlServer.Management.Smo.View view in views)
+    {
+		if(view.IsSystemObject) continue;
+		W($"public DbSet<{ClassNameView(view.Name)}> {PropertyNamePluralizeView(view.Name)} {{ get; set; }}");
+    }
+	W("//Procedures");
+    foreach (Microsoft.SqlServer.Management.Smo.StoredProcedure procedure in db.StoredProcedures)
+    {
+		if(procedure.IsSystemObject) continue;
+		var first = true;
+		WW($"public int {ClassNameProcedure(procedure.Name)}(");
+		foreach (Microsoft.SqlServer.Management.Smo.StoredProcedureParameter parameter in procedure.Parameters)
+		{
+			if(first) first=false;
+			else
+			{
+				Write(",");
+			}
+			Write(ToCSharpType(parameter.DataType.SqlDataType).ToString());
+			Write(" ");
+			var pName=parameter.Name;
+			if(char.IsDigit(parameter.Name[1])) pName="@_"+pName.Substring(1);
+			Write(pName);
+		}
+		WriteLine(")");
+		W("{");
+		Indent++;
+		WW($"return this.Database.ExecuteSqlRaw(\"exec {procedure.Schema}.{procedure.Name} ");
+		Indent++;
+		var i=0;
+		first = true;
+		foreach (Microsoft.SqlServer.Management.Smo.StoredProcedureParameter parameter in procedure.Parameters)
+		{
+			if(first) first=false;
+			else
+			{
+				Write(",");
+			}
+			Write("{"+i+"}");i++;
+		}
+		Write("\"");
+		first = true;
+		foreach (Microsoft.SqlServer.Management.Smo.StoredProcedureParameter parameter in procedure.Parameters)
+		{
+			Write(",");
+			var pName=parameter.Name;
+			if(char.IsDigit(parameter.Name[1])) pName="@_"+pName.Substring(1);
+			Write(pName);
+		}
+		WriteLine(");");
+		Indent--;
+		Indent--;
+		W("}");
+	}
+
+
+
+	W("//Functions here");
+	foreach (Microsoft.SqlServer.Management.Smo.UserDefinedFunction function in db.UserDefinedFunctions)
+	{
+		if(function.IsSystemObject) continue;
+		var first = true;
+		W($"[DbFunction(\"{function.Name}\",Schema=\"{function.Schema}\")]");
+		WW($"public static int {ClassNameProcedure(function.Name)}(");
+		foreach (Microsoft.SqlServer.Management.Smo.UserDefinedFunctionParameter parameter in function.Parameters)
+		{
+			if(first) first=false;
+			else
+			{
+				Write(",");
+			}
+			Write(ToCSharpType(parameter.DataType.SqlDataType).ToString());
+			Write(parameter.Name);
+		}
+		WriteLine(")");
+		W("{");
+		Indent++;
+		W("throw new NotImplementedException();");
+		Indent--;
+		W("}");		
+	}
+	Indent--;
+	W("}");
+	W("//region Table Classes");
+    foreach (Microsoft.SqlServer.Management.Smo.Table table in tables)
+    {
+		W($"[Table(\"{table.Name}\",Schema=\"{table.Schema}\")]");
+		W($"public partial class {ClassName(table.Name)}");
+		W("{");
+		Indent++;
+		var first = true;
+        foreach (Column column in table.Columns)
+        {
+			if(first) first=false;
+			else
+			{
+				W("");
+			}
+			if(column.DataType.IsStringType && column.DataType.MaximumLength!=-1) 
+			{
+				W("[MaxLength("+column.DataType.MaximumLength+")]");
+			}
+			W($"[Column(\"{column.Name}\")]");
+			var needsQuestion=column.Nullable;
+			var type=ToCSharpType(column.DataType.SqlDataType);
+			if(type.ToString()=="System.String") needsQuestion=false;
+			if(!column.Nullable)
+			{
+				W("[Required]");
+			}
+			W($"public {type}{(needsQuestion?"?":"")} {PropertyName(column.Name)} {{ get; set; }}");
+        }
+		Indent--;
+		W("}");
+		W("");
+	}
+	W("");
+	W("//endregion");
+	W("//region Views");
+    foreach (Microsoft.SqlServer.Management.Smo.View view in views)
+    {
+		if(view.IsSystemObject) continue;
+
+		W($"[Table(\"{view.Name}\",Schema=\"{view.Schema}\")]");
+		W($"public partial class {ClassNameView(view.Name)}");
+		W("{");
+		Indent++;
+		var first=true;
+        foreach (Column column in view.Columns)
+        {
+			if(first) first=false;
+			else
+			{
+				W("");
+			}
+			W($"[Column(\"{column.Name}\")]");
+			W($"public {ToCSharpType(column.DataType.SqlDataType)} {PropertyName(column.Name)} {{ get; set; }}");
+        }
+		Indent--;
+		W("}");
+		W("");
+	}
+	W("//endregion");
+	Indent--;
+	W("}");
+	W("");
+#>
